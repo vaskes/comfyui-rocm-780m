@@ -57,7 +57,10 @@ RUN pip3 install --break-system-packages --pre \
 
 # --- ComfyUI ---
 ARG COMFYUI_REF=master
-RUN git clone --depth 1 -b ${COMFYUI_REF} https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+RUN curl -L -s -o /tmp/comfyui.tar.gz https://github.com/comfyanonymous/ComfyUI/archive/refs/heads/${COMFYUI_REF}.tar.gz && \
+    tar xzf /tmp/comfyui.tar.gz && \
+    mv ComfyUI-${COMFYUI_REF} /opt/ComfyUI && \
+    rm /tmp/comfyui.tar.gz
 WORKDIR /opt/ComfyUI
 
 # Install ComfyUI requirements (filter out torch/torchvision/triton which we have from TheRock)
@@ -65,7 +68,10 @@ RUN grep -vE '^(torch|torchvision|triton|torchaudio)\b' requirements.txt > /tmp/
     pip3 install --break-system-packages -r /tmp/req_filtered.txt
 
 # --- ComfyUI-Manager (handy for custom nodes later) ---
-RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager && \
+RUN curl -L -s -o /tmp/cman.tar.gz https://github.com/ltdrdata/ComfyUI-Manager/archive/refs/heads/main.tar.gz && \
+    mkdir -p /opt/ComfyUI/custom_nodes/ComfyUI-Manager && \
+    tar xzf /tmp/cman.tar.gz -C /opt/ComfyUI/custom_nodes/ComfyUI-Manager --strip-components=1 && \
+    rm /tmp/cman.tar.gz && \
     pip3 install --break-system-packages -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt || true
 
 # --- SageAttention for ROCm 7 (jaguardev's binary wheel) ---
