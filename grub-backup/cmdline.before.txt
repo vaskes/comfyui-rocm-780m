@@ -1,0 +1,1 @@
+BOOT_IMAGE=/vmlinuz-7.0.0-30-generic root=UUID=389200bf-28bd-4f18-a6f7-db987c4735b8 ro quiet splash amd_iommu=on iommu=pt ttm.pages_limit=10485760 amdgpu.gttsize=40960 amdgpu.lockup_timeout=60000 vt.handoff=7

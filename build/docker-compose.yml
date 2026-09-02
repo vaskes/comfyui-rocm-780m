@@ -1,0 +1,51 @@
+name: comfyiu
+
+services:
+  comfyui:
+    build:
+      context: .
+      dockerfile: Dockerfile.v5
+    image: comfyiu:therock-gfx1103-v5
+    container_name: comfyiu
+    restart: unless-stopped
+    init: true
+    ipc: host
+    network_mode: host
+    # Required for ROCm/HIP access
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - SYS_PTRACE
+    # Host render GID (992) and video GID (44) — for /dev/kfd and /dev/dri
+    group_add:
+      - "992"
+      - "44"
+    # Persistent host volumes
+    volumes:
+      - /opt/comfyiu/models:/opt/ComfyUI/models
+      - /opt/comfyiu/output:/opt/ComfyUI/output
+      - /opt/comfyiu/input:/opt/ComfyUI/input
+      - /opt/comfyiu/custom_nodes:/opt/ComfyUI/custom_nodes
+      - /opt/comfyiu/user:/opt/ComfyUI/user
+      - /opt/comfyiu/logs:/opt/ComfyUI/logs
+      - /opt/comfyiu/workspace:/workspace
+    # Default flags: flash-attn + ck-triton + fp8 + gpu-only + no-pinned
+    # All mutually-exclusive attention backends listed below — pick ONE
+    #   --use-flash-attention (Triton ROCm, works for most DiT/UNet)
+    #   --use-ck-attention   (comfy-kitchen, best with --supports-fp8-compute)
+    #   --use-sage-attention (headdim must be in [64, 96, 128], falls back otherwise)
+    command:
+      - python
+      - main.py
+      - --use-flash-attention
+      - --enable-triton-backend
+      - --supports-fp8-compute
+      - --disable-pinned-memory
+      - --gpu-only
+      - --listen
+      - 0.0.0.0
+      - --port
+      - "8188"
