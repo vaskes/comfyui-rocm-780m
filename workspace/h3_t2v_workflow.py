@@ -116,7 +116,7 @@ nodes = {
 # ComfyUI uses node IDs as keys in a flat dict
 workflow = {str(k): v for k, v in nodes.items()}
 
-out_path = "/opt/comfyiu/workspace/h3_t2v_workflow.json"
+out_path = "/workspace/h3_t2v_workflow.json"
 with open(out_path, "w") as f:
     json.dump(workflow, f, indent=2)
 print(f"wrote {out_path}")

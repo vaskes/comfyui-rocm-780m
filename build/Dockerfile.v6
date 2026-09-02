@@ -82,10 +82,19 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 # With g++/cmake/ninja-build installed above, the Triton JIT compiler can
 # actually compile flash-attn kernels on first use. Without them, flash-attn
 # silently falls back to pytorch SDPA — see docs/FLASH_ATTN_C_COMPILER.md
+#
+# CC/CXX are set here so Triton JIT can find gcc during flash-attn wheel build.
+ENV CC=gcc
+ENV CXX=g++
+# flash-attn + bitsandbytes need GPU access to compile (flash-attn setup.py
+# imports torch to detect HIP/CUDA arch). docker build has no GPU, so this
+# fails in the build context. We install these at FIRST RUN via entrypoint
+# (see scripts/install_gpu_deps.sh) instead of at build time.
 RUN pip3 install --break-system-packages --no-build-isolation \
-    "flash-attn==2.8.3.post1" \
     "bitsandbytes" \
-    || echo "WARNING: flash-attn/bitsandbytes install failed"
+    || echo "WARNING: bitsandbytes install failed (will retry at runtime)"
+
+# Stub: flash-attn installed by entrypoint on first run
 
 # --- Runtime environment ---
 # v6: pass CC=gcc explicitly so Triton can find the C compiler
@@ -110,9 +119,20 @@ ENV AMD_LOG_LEVEL=0
 ENV AMD_SERIALIZE_KERNEL=0
 
 WORKDIR /opt/ComfyUI
+
+# Install GPU-only deps at first run (flash-attn, bitsandbytes).
+# These need GPU access to compile, which docker build does not provide.
+COPY install_gpu_deps.sh /usr/local/bin/install_gpu_deps.sh
+RUN chmod 755 /usr/local/bin/install_gpu_deps.sh
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
 VOLUME ["/opt/ComfyUI/models", "/opt/ComfyUI/output", "/opt/ComfyUI/input", "/opt/ComfyUI/custom_nodes", "/opt/ComfyUI/user"]
 
 EXPOSE 8188
+
+# Entrypoint: installs GPU deps on first run, then execs CMD
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Default command with all optimizations
 CMD ["python", "main.py", \

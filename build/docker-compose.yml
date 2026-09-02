@@ -4,8 +4,11 @@ services:
   comfyui:
     build:
       context: .
-      dockerfile: Dockerfile.v5
-    image: comfyiu:therock-gfx1103-v5
+      dockerfile: Dockerfile.v6
+    image: comfyiu:gpu-deps
+    # Base image: comfyiu:latest (5e680e5d3a1f, no flash-attn)
+    # Prod image: comfyiu:gpu-deps (with flash-attn + bitsandbytes)
+    # See scripts/install_gpu_deps.sh for the install step
     container_name: comfyiu
     restart: unless-stopped
     init: true
@@ -23,7 +26,14 @@ services:
     group_add:
       - "992"
       - "44"
-    # Persistent host volumes
+    environment:
+      # flash-attn via Triton ROCm backend (gfx1103 native)
+      - FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
+      - CC=gcc
+      - CXX=g++
+      # APU benefits from non-default allocator (TheRock wheels)
+      - PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
+    # Persistent host volumes — survive container rebuilds
     volumes:
       - /opt/comfyiu/models:/opt/ComfyUI/models
       - /opt/comfyiu/output:/opt/ComfyUI/output
@@ -32,7 +42,7 @@ services:
       - /opt/comfyiu/user:/opt/ComfyUI/user
       - /opt/comfyiu/logs:/opt/ComfyUI/logs
       - /opt/comfyiu/workspace:/workspace
-    # Default flags: flash-attn + ck-triton + fp8 + gpu-only + no-pinned
+    # Default flags: flash-attn + triton + fp8 + gpu-only + no-pinned
     # All mutually-exclusive attention backends listed below — pick ONE
     #   --use-flash-attention (Triton ROCm, works for most DiT/UNet)
     #   --use-ck-attention   (comfy-kitchen, best with --supports-fp8-compute)
