@@ -1,0 +1,57 @@
+name: comfyiu-vaskes
+
+services:
+  comfyui:
+    # Build planetary base first:
+    #   cd build && docker build -t comfyiu:base .
+    # Then build this profile:
+    #   docker build -f profiles/vaskes/Dockerfile -t comfyiu:vaskes \
+    #     --build-arg COMYIU_BASE_TAG=base profiles/vaskes
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: comfyiu:vaskes
+    container_name: comfyui
+    restart: unless-stopped
+    init: true
+    ipc: host
+    network_mode: host
+    # Required for ROCm/HIP access
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - SYS_PTRACE
+    # Host render GID (992) and video GID (44) — for /dev/kfd and /dev/dri
+    group_add:
+      - "992"
+      - "44"
+    environment:
+      # flash-attn via Triton ROCm backend (gfx1103 native)
+      - FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
+      - CC=gcc
+      - CXX=g++
+      # APU benefits from non-default allocator (TheRock wheels)
+      - PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
+      # bitsandbytes has no ROCm 7.13 prebuilt, fall back to ROCm 7.2 binaries
+      - BNB_ROCM_VERSION=72
+      # MIOpen does not ship gfx1103 (RDNA3 APU) prebuilt conv kernels, so it
+      # prints "File is unreadable: gfx1103_6.HIP.fdb.txt" on first conv.
+      # Warning is benign (falls back to JIT). MIOPEN_LOG_LEVEL=3 hides it.
+      - MIOPEN_LOG_LEVEL=3
+    # Persistent host volumes — survive container rebuilds.
+    # custom_nodes/ IS in the list so user-added nodes via Manager persist.
+    # To re-sync image's 22 custom nodes to host: see profiles/vaskes/README.md
+    volumes:
+      - /opt/comfyiu/models:/opt/ComfyUI/models
+      - /opt/comfyiu/output:/opt/ComfyUI/output
+      - /opt/comfyiu/input:/opt/ComfyUI/input
+      - /opt/comfyiu/custom_nodes:/opt/ComfyUI/custom_nodes
+      - /opt/comfyiu/user:/opt/ComfyUI/user
+      - /opt/comfyiu/logs:/opt/ComfyUI/logs
+      - /opt/comfyiu/workspace:/workspace
+    # CMD inherited from profiles/vaskes/Dockerfile
+    # (includes --enable-manager + --use-flash-attention + standard optimizations)
+    command: []

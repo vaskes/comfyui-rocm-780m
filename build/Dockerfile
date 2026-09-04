@@ -1,7 +1,19 @@
 # ComfyUI + ROCm TheRock (gfx1103 native) for Radeon 780M
+# PLANETARY BASE: builds comfyiu:base — the minimum needed to run ComfyUI
+# on an AMD APU (gfx1103) with ROCm 7.13 / TheRock wheels. No custom nodes
+# are installed here. For a specific workflow setup, see ../profiles/.
+#
 # Built per official ComfyUI README: rocm.nightlies.amd.com/v2/gfx110X-all/
-# Inspired by jaguardev/780m-ai-stack (TheRock multi-stage), but on ubuntu:24.04 base
-# Constraints: no kernel change, no amd_iommu=off, no host ROCm change
+#
+# MUTUALLY EXCLUSIVE NOTES (ROCm vs nvidia):
+# - This is the ROCm/gfx1103 build. For nvidia, use a separate image with
+#   FROM nvidia/cuda and PyTorch.org wheels (cu130/cu132).
+# - SageAttention: ROCm uses guinmoon wheel, NOT thu-ml (CUDA-only).
+# - flash-attn: installed at first run via entrypoint (needs GPU; build has
+#   no GPU access for the wheel build).
+# - Skip nvidia-only packages: nvidia-vfx, onnxruntime-gpu, deepspeed.
+#
+# Constraints: no kernel change, no amd_iommu=off, no host ROCm change.
 
 FROM ubuntu:24.04
 
@@ -14,6 +26,8 @@ ENV PIP_NO_CACHE_DIR=1
 # - python3.12 (default in 24.04, matches wheel cp312)
 # - ROCm deps (libhsa-runtime64, libamd-comgr, libdrm-amdgpu) — needed even for TheRock wheels
 # - ComfyUI runtime deps (ffmpeg, libGL, libxcb, etc.)
+# - C/C++ toolchain (g++, cmake, ninja-build) — required for Triton JIT to compile
+#   flash-attn kernels on first use. Without this, flash-attn silently falls back to SDPA.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.12 python3.12-venv python3.12-dev python3-pip \
     ca-certificates curl wget git aria2 \
@@ -24,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libgomp1 \
     ffmpeg sox libportaudio2 libportaudiocpp0 \
     libudev1 pkg-config \
+    g++ gcc cmake ninja-build \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Ensure python3.12 is the default
@@ -33,21 +48,16 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 WORKDIR /opt
 
 # --- TheRock wheels for gfx110X-all (official ComfyUI RDNA3 path) ---
-# - torch/torchvision/triton compiled natively for gfx1103 (no HSA_OVERRIDE_GFX_VERSION needed)
-# - rocm-sdk-core + rocm-sdk-libraries-gfx110x-all provide the gfx1103-specific runtime
-# - uses pre-release (--pre) because these are alpha/beta nightly builds
+# MUTUALLY EXCLUSIVE: this is the ROCm TheRock install. Do NOT mix with
+# PyTorch.org cu130/cu132 wheels.
 ARG TORCH_IDX=https://rocm.nightlies.amd.com/v2/gfx110X-all/
-# Install ONLY from gfx110X-all (no --extra-index-url PyPI — would let pip grab CUDA torch)
 RUN pip3 install --break-system-packages --pre \
     rocm-sdk-core \
     rocm-sdk-libraries-gfx110x-all \
     --index-url ${TORCH_IDX} \
     --no-deps
 
-# PyTorch stack (torch + torchvision + triton) from same gfx110X-all index, pinned
-# - Pinned because pip with --extra-index-url picks highest version from any index,
-#   and PyPI has newer stable torch that doesn't know about gfx1103
-# - torchvision on gfx110X-all: 0.27.0a0+rocm7.13.0a (paired with torch 2.9.1)
+# PyTorch stack from same gfx110X-all index, pinned
 RUN pip3 install --break-system-packages --pre \
     "torch==2.9.1+rocm7.13.0a20260513" \
     "torchvision==0.24.0+rocm7.13.0a20260513" \
@@ -55,7 +65,7 @@ RUN pip3 install --break-system-packages --pre \
     "triton" \
     --index-url ${TORCH_IDX}
 
-# --- ComfyUI ---
+# --- ComfyUI core ---
 ARG COMFYUI_REF=master
 RUN curl -L -s -o /tmp/comfyui.tar.gz https://github.com/comfyanonymous/ComfyUI/archive/refs/heads/${COMFYUI_REF}.tar.gz && \
     tar xzf /tmp/comfyui.tar.gz && \
@@ -67,29 +77,29 @@ WORKDIR /opt/ComfyUI
 RUN grep -vE '^(torch|torchvision|triton|torchaudio)\b' requirements.txt > /tmp/req_filtered.txt && \
     pip3 install --break-system-packages -r /tmp/req_filtered.txt
 
-# --- ComfyUI-Manager (handy for custom nodes later) ---
-RUN curl -L -s -o /tmp/cman.tar.gz https://github.com/ltdrdata/ComfyUI-Manager/archive/refs/heads/main.tar.gz && \
-    mkdir -p /opt/ComfyUI/custom_nodes/ComfyUI-Manager && \
-    tar xzf /tmp/cman.tar.gz -C /opt/ComfyUI/custom_nodes/ComfyUI-Manager --strip-components=1 && \
-    rm /tmp/cman.tar.gz && \
-    pip3 install --break-system-packages -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt || true
+# === CC/CXX for Triton JIT (flash-attn first-run compile) ===
+ENV CC=gcc
+ENV CXX=g++
 
-# --- SageAttention for ROCm 7 (jaguardev's binary wheel) ---
-RUN pip3 install --break-system-packages --no-cache-dir \
-    https://github.com/guinmoon/SageAttention-Rocm7/releases/download/v1.0.6_rocm7/sageattention-1.0.6-py3-none-any.whl \
-    || echo "WARNING: sageattention-1.0.6 install failed, will try without"
+# --- bitsandbytes (works on ROCm with TheRock wheels) ---
+# flash-attn installed at first run via entrypoint (needs GPU; build has none)
+RUN pip3 install --break-system-packages --no-build-isolation \
+    "bitsandbytes" \
+    || echo "WARNING: bitsandbytes install failed (will retry at runtime)"
 
-# --- Runtime environment ---
-# jaguardev's env, with notes from past attempts on this host
-# Key changes vs default:
-#   HSA_ENABLE_SDMA=0  (jaguar; previous attempt had 1 which hung)
-#   HSA_USE_SVM=0      (jaguar; previous attempt had default)
-#   TORCH_CUDNN_ENABLED=0  (avoid cudnn path entirely)
-#   TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1  (try AOTriton flash/efficient)
-#   FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE  (Triton flash-attn path)
-#   MIOPEN_FIND_MODE=2  (cache then tune)
-#   MIOPEN_FIND_ENFORCE=1  (re-search DB)
-#   PYTORCH_TUNABLEOP_TUNING=0  (don't autotune at runtime — slow + risky)
+# --- ROCm flash-attn CUDA-stub for SeedVR2 compatibility ---
+# SeedVR2 does: import flash_attn_2_cuda  # noqa: F401
+# The ROCm flash-attn wheel uses the Triton backend, not the CUDA C++ ext.
+# We create an empty stub so SeedVR2's detection check passes.
+# This is harmless: SeedVR2 never calls functions from this module.
+RUN cat > /usr/local/lib/python3.12/dist-packages/flash_attn_2_cuda.py << "STUB_EOF"
+# ROCm compatibility stub. The ROCm flash-attn wheel uses the Triton
+# backend instead of the CUDA C++ extension. SeedVR2 only needs this
+# module to be importable; actual attention uses flash_attn_varlen_func.
+__all__ = []
+STUB_EOF
+
+# --- Runtime ROCm environment ---
 ENV HSA_ENABLE_SDMA=0
 ENV HSA_USE_SVM=0
 ENV TORCH_CUDNN_ENABLED=0
@@ -107,18 +117,37 @@ ENV PYTORCH_TUNABLEOP_TUNING=0
 ENV PYTORCH_HIP_ALLOC_CONF=backend:native,garbage_collection_threshold:0.7,max_split_size_mb:256,expandable_segments:True
 ENV AMD_LOG_LEVEL=0
 ENV AMD_SERIALIZE_KERNEL=0
-# gfx1103-native: do NOT set HSA_OVERRIDE_GFX_VERSION (gfx110X-all wheels know about gfx1103)
 
-# Make /opt/ComfyUI a workspace; mount points the user expects
 WORKDIR /opt/ComfyUI
-VOLUME ["/opt/ComfyUI/models", "/opt/ComfyUI/output", "/opt/ComfyUI/input", "/opt/ComfyUI/custom_nodes", "/opt/ComfyUI/user"]
+
+# Install GPU-only deps at first run (flash-attn).
+# These need GPU access to compile, which docker build does not provide.
+COPY install_gpu_deps.sh /usr/local/bin/install_gpu_deps.sh
+RUN chmod 755 /usr/local/bin/install_gpu_deps.sh
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+# Persistent host volumes (for custom installs + models)
+# NOTE: custom_nodes/ NOT in volume list — nodes are baked into the image.
+# To override from host: comment out the VOLUME block or rsync.
+VOLUME ["/opt/ComfyUI/models", "/opt/ComfyUI/output", "/opt/ComfyUI/input", "/opt/ComfyUI/user"]
 
 EXPOSE 8188
 
-# Default command: ComfyUI with sage attention (jaguar's "balanced" variant)
-# Override in docker-compose for aggressive variants
+# Entrypoint: installs GPU deps on first run, then execs CMD
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Default command with standard optimizations.
+# MUTUALLY EXCLUSIVE attention backends (pick ONE — see docs/ATTENTION_BACKENDS.md):
+#   --use-flash-attention (Triton ROCm; works for most DiT/UNet) ← DEFAULT
+#   --use-ck-attention   (comfy-kitchen; best with --supports-fp8-compute)
+#   --use-sage-attention (headdim must be in [64, 96, 128])
+#   (no flag)            pytorch SDPA fallback (slowest but always works)
 CMD ["python", "main.py", \
+     "--use-flash-attention", \
+     "--enable-triton-backend", \
+     "--supports-fp8-compute", \
+     "--disable-pinned-memory", \
+     "--gpu-only", \
      "--listen", "0.0.0.0", \
-     "--port", "8188", \
-     "--use-sage-attention", \
-     "--enable-manager"]
+     "--port", "8188"]

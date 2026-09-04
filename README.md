@@ -20,8 +20,9 @@
 8. [Benchmarks](#benchmarks)
 9. [Examples](#examples)
 10. [Troubleshooting](#troubleshooting)
-11. [Repository layout](#repository-layout)
-12. [Credits](#credits)
+11. [Workflow profiles](#workflow-profiles)
+12. [Repository layout](#repository-layout)
+13. [Credits](#credits)
 
 ---
 
@@ -351,6 +352,38 @@ sudo usermod -aG render,video $USER
 
 ---
 
+## Workflow profiles
+
+The planetary base image (`comfyiu:base`, built from `build/Dockerfile`)
+contains only the minimum to run ComfyUI on gfx1103 - no custom nodes.
+
+For a specific workflow setup, use one of the **profiles** in
+[`profiles/`](profiles/):
+
+| Profile | Use case |
+|---|---|
+| [`vaskes/`](profiles/vaskes/) | One user's full H3 t2v + GGUF + VFI + Qwen3-TTS + SeedVR2 stack (22 custom nodes) |
+
+**Why a separate profiles dir?** The base is the *planetary* solution
+("make ComfyUI run on a Radeon 780M APU"). Each user's custom-node stack
+is private/opinionated and shouldn't bloat the main repo. Profiles
+inherit the base and add their own deps + custom nodes.
+
+To build the base, then the vaskes profile:
+
+```bash
+cd build
+docker build -t comfyiu:base .
+cd ..
+docker build -f profiles/vaskes/Dockerfile -t comfyiu:vaskes profiles/vaskes
+docker compose -f profiles/vaskes/docker-compose.yml up -d
+```
+
+See [`profiles/README.md`](profiles/README.md) for the full profile system
+documentation and how to add your own profile.
+
+---
+
 ## Repository layout
 
 ```
@@ -358,9 +391,17 @@ sudo usermod -aG render,video $USER
 ├── README.md                        # this file
 ├── LICENSE                          # MIT
 ├── build/
-│   ├── Dockerfile.v4                # base image: torch + comfy + sage
-│   ├── Dockerfile.v5                # v4 + flash-attn + bitsandbytes
-│   └── docker-compose.yml           # container with all GPU devices + volumes
+│   ├── Dockerfile                   # PLANETARY BASE: builds comfyiu:base (no custom nodes)
+│   ├── Dockerfile.v5                # historical: v5 build (pre-profiles split)
+│   ├── entrypoint.sh                # base entrypoint (installs flash-attn on first run)
+│   └── install_gpu_deps.sh          # base helper: flash-attn / bitsandbytes first-run
+├── profiles/
+│   ├── README.md                    # profile system documentation
+│   └── vaskes/                      # one user's full H3 t2v workflow profile (22 nodes)
+│       ├── Dockerfile               # FROM comfyiu:base + 22 custom nodes + comfyui-Manager
+│       ├── docker-compose.yml       # container config for this profile
+│       ├── install_node.sh          # custom-node install helper (from github tarball)
+│       └── README.md                # whats in this profile + how to build
 ├── scripts/
 │   ├── start_comfyiu.sh             # balanced: sage+lowvram
 │   ├── start_with_override.sh       # HSA_OVERRIDE_GFX_VERSION=11.0.0 (deprecated)
