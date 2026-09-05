@@ -15,7 +15,9 @@ FROM comfyiu:${COMYIU_BASE_TAG}
 
 # === Common pip deps for custom nodes ===
 # ROCm-friendly. NOT included (CUDA-only): nvidia-vfx, onnxruntime-gpu, deepspeed
+# NOTE: qwen-tts 0.1.1 pins accelerate==1.12.0 EXACTLY. Pin first.
 RUN pip3 install --break-system-packages --no-cache-dir \
+    "accelerate==1.12.0" \
     opencv-contrib-python-headless \
     imageio-ffmpeg \
     imageio \

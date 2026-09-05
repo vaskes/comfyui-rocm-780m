@@ -87,17 +87,21 @@ RUN pip3 install --break-system-packages --no-build-isolation \
     "bitsandbytes" \
     || echo "WARNING: bitsandbytes install failed (will retry at runtime)"
 
-# --- ROCm flash-attn CUDA-stub for SeedVR2 compatibility ---
-# SeedVR2 does: import flash_attn_2_cuda  # noqa: F401
-# The ROCm flash-attn wheel uses the Triton backend, not the CUDA C++ ext.
-# We create an empty stub so SeedVR2's detection check passes.
-# This is harmless: SeedVR2 never calls functions from this module.
-RUN cat > /usr/local/lib/python3.12/dist-packages/flash_attn_2_cuda.py << "STUB_EOF"
-# ROCm compatibility stub. The ROCm flash-attn wheel uses the Triton
-# backend instead of the CUDA C++ extension. SeedVR2 only needs this
-# module to be importable; actual attention uses flash_attn_varlen_func.
-__all__ = []
-STUB_EOF
+# --- ROCm flash-attn -> flash_attn_2_cuda shim for SeedVR2 / flash-attn-using tools ---
+# The CUDA flash-attn wheel provides `flash_attn_2_cuda` as a C++ extension
+# module exposing flash_attn_varlen_func, flash_attn_func, etc. The ROCm
+# flash-attn wheel (2.8.3.post1) uses the Triton backend instead, which lives
+# in `flash_attn.flash_attn_interface`.
+#
+# Tools (SeedVR2, ComfyUI-Manager cache, etc.) often do:
+#     import flash_attn_2_cuda
+#     flash_attn_2_cuda.flash_attn_varlen_func(...)
+#
+# This shim re-exports the Triton functions under the CUDA module name so
+# the same code works on both CUDA and ROCm. The functions are real (Triton
+# kernels JIT-compiled for gfx1103 on first call), not stubs. This makes
+# SeedVR2 actually use flash-attn, not just pass its detection check.
+COPY flash_attn_2_cuda_shim.py /usr/local/lib/python3.12/dist-packages/flash_attn_2_cuda.py
 
 # --- Runtime ROCm environment ---
 ENV HSA_ENABLE_SDMA=0
