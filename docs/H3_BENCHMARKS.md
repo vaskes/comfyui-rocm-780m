@@ -70,14 +70,46 @@ and works at 4 steps in the kijai examples.
 
 ## GGUF vs native safetensors on 51 GB GTT
 
-The GGUF path (`MiniMax-H3-ref2va-Q4_0.gguf` 19.9 GB +
-`MiniMax-H3-encoder-Q4_K_M.gguf` 16.5 GB) is the only configuration
-that fits on 4 GB VRAM + 51 GB GTT without OOM. Native safetensors
-(`minimax_h3_ref2va_pruned_int8_convrot.safetensors` 21 GB + the
-Qwen3-VL encoder 25 GB BF16) was tried first and OOM'd at 50.36 GiB
-during the first sampling step. The GGUF Q4_0 / Q4_K_M quantisations
-trim ~9 GB off the encoder and ~5 GB off the DiT relative to int8, and
-that's the difference between "OOM at step 1" and "runs to completion".
+The 780M's media engine handles BF16 and int8 natively in silicon,
+but `int8_convrot` is a quantisation scheme designed for the NVIDIA
+path. When a `*_int8_convrot.safetensors` checkpoint is loaded on
+Radeon, the quantised weights are **dequantised to BF16 at load time**
+before they ever reach the matrix-multiply units. That means int8
+saves disk and on-the-fly transfer bytes but not actual compute —
+every step runs the same BF16 matmul that a pure BF16 checkpoint
+would. Worse, the dequant itself is a non-trivial kernel that has to
+happen on every forward pass for the layers it touches, so the int8
+file can be *slower* than a clean BF16 file on this APU.
+
+GGUF, by contrast, is built on top of the **llama.cpp engine** which
+ships its own ROCm/HIP kernels for every quantised data type
+(Q4_0, Q4_K, Q6_K, F16, F32, etc.). On load, those kernels are
+JIT-compiled once via Triton/LLVM and then the quantised weights are
+fed straight into the dequantising matmul — no intermediate BF16
+buffer is materialised in GTT, no per-step dequant overhead, and
+the cast (Q-quant → FP16/BF16) happens inside the matrix kernel
+itself. On RDNA3 (gfx1103) this path is fully exercised because
+TheRock's `gfx110X-all` wheel set includes the `rocWMMA` and
+`comfy_kitchen` int8/int4 GEMM kernels that the llama engine
+dispatches into.
+
+Practical upshot on our setup:
+
+- `*_int8_convrot.safetensors` 21 GB DiT + 25 GB BF16 encoder → OOM
+  at 50.36 GiB during the first sampling step. The dequant-to-BF16
+  pattern also keeps peak working set high because both the
+  quantised storage and the BF16 working copy are live at once.
+- `*_Q4_0.gguf` 19.9 GB DiT + `*_Q4_K_M.gguf` 16.5 GB encoder →
+  fits with headroom, peak ~42 GB during sampling, no
+  dequant-to-BF16 working set, GGUF kernels do the cast inside the
+  GEMM. This is the only configuration that runs to completion on
+  4 GB VRAM + 51 GB GTT today.
+
+The GGUF Q4_0 / Q4_K_M quantisations trim ~9 GB off the encoder and
+~5 GB off the DiT relative to the int8 path, and the GGUF llama
+engine avoids the int8→BF16 dequant step that the native int8 path
+forces on Radeon. Together that's the difference between "OOM at step
+1" and "runs to completion in 19:36".
 
 ## Memory breakdown per run (from the user's log)
 
