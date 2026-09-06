@@ -18,6 +18,12 @@ running on `comfyiu:base` (TheRock gfx110X-all wheels).
 | 2 | sage-attn (KJNodes `Patch Sage Attention` mode=`auto`) | res_multistep | 20 | none | 41:30 | 124.5 s | 44:07 | **1.92×** |
 | 3 | sage-attn (same) | res_multistep | 8 | `minimax_h3_ref2v_lightx2v_turbo_4step_v0.1_resized_avg_rank_20_bf16.safetensors` (kijai) | 17:43 | 132.9 s | 19:36 | **4.04×** |
 
+User feedback (2026-09-06, after the 8-step run): the 4-step
+configuration with this LoRA produces unacceptable quality, so the
+8-step setting is the sweet spot — 19:36 total is what production
+smoke tests target. The 4-step LoRA is left in the file as a knob
+for future experiments but is not recommended.
+
 Notes:
 - All three runs use the same model (`MiniMax-H3-ref2va-Q4_0.gguf` 19.9 GB
   GGUF, `MiniMax-H3-encoder-Q4_K_M.gguf` 16.5 GB GGUF,
@@ -115,6 +121,6 @@ if it lingers.
 
 ## What's next
 
-- 4-step run with the same LoRA — expected ~10-12 min total on 0.2 MP / 5 s.
+- ~~4-step run with the same LoRA~~ — tried 2026-09-06, quality was unacceptable. The 8-step config (19:36) is the production sweet spot.
 - Native int8 path (`minimax_h3_ref2va_pruned_int8_convrot.safetensors`) once the OOM pattern is fixed via `unload_model_after`.
 - SDPA fallback as a third tier for the truly memory-starved cases.
