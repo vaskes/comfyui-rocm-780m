@@ -16,8 +16,11 @@ FROM comfyiu:${COMYIU_BASE_TAG}
 # === Common pip deps for custom nodes ===
 # ROCm-friendly. NOT included (CUDA-only): nvidia-vfx, onnxruntime-gpu, deepspeed
 # NOTE: qwen-tts 0.1.1 pins accelerate==1.12.0 EXACTLY. Pin first.
+# NOTE: aiohttp 3.14.x has a C-extension segfault on gfx1103 during
+# ComfyUI-Manager's default_cache_update task. Pin to 3.11.x stable.
 RUN pip3 install --break-system-packages --no-cache-dir \
     "accelerate==1.12.0" \
+    "aiohttp==3.11.18" \
     opencv-contrib-python-headless \
     imageio-ffmpeg \
     imageio \
@@ -102,8 +105,9 @@ RUN install_node.sh "Comfy-Org/ComfyUI-Manager" "ComfyUI-Manager" && \
     install_node.sh "rgthree/rgthree-comfy" "rgthree-comfy" && \
     install_node.sh "numz/ComfyUI-SeedVR2_VideoUpscaler" "seedvr2_videoupscaler" && \
     # numz/SeedVR2_VideoUpscaler -> numz/ComfyUI-SeedVR2_VideoUpscaler
-    echo "=== 22 custom nodes install attempt complete ==="
-
+    echo "=== 22 custom nodes install attempt complete ===" && \
+    python3 /opt/ComfyUI/custom_nodes/ComfyUI-H3-Multishot/apply_gguf_arch_patch.py && \
+    echo "=== applied minimax_h3 arch patch to ComfyUI-GGUF ==="
 # === SageAttention (ROCm fork by guinmoon, NOT thu-ml) ===
 # The base already has sageattention in pip deps? No — SageAttention needs a
 # ROCm-specific wheel. Install here.
