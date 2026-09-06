@@ -129,7 +129,60 @@ JoyEcho LLM node is the surgical fix for that pattern; in the GGUF
 path the encoder is small enough that it doesn't blow the budget even
 if it lingers.
 
-## What didn't work, and what to do instead
+## GGUF vs int8_convrot on a 2-second clip with --lowvram (2026-09-07)
+
+Both stacks run the same H3 LoRA (8 steps) and the same attention
+patch (KJNodes `auto` → `sageattn` Triton). The container is in
+`--lowvram` mode so partial frees happen between phases; we see lines
+like
+
+```
+[INFO] Unloaded partially: 1249.17 MB freed, 15196.76 MB remains loaded
+[INFO] Unloaded partially: 1175.85 MB freed,  3790.64 MB remains loaded
+```
+
+in the int8_convrot run. Per-iter sampling time is essentially
+identical, but the prompt totals diverge because of model-load and
+quant-metadata setup overhead.
+
+| | GGUF Q4_0 | int8_convrot | Delta |
+|---|---:|---:|---:|
+| Sampling 8 steps | 3:47 | 3:51 | +1.6% |
+| Per-iter | 28.44 s | 28.89 s | +1.6% |
+| Full prompt (load + sample + VAE) | **304 s** | **467 s** | **+54%** |
+| Setup overhead (load + unload + quant setup) | ~1:13 | ~3:54 | **+220%** |
+
+The sampling step itself is the same speed, so the int8_convrot
+penalty is paid entirely in model-load and quantisation-metadata
+parsing. For a single short render that overhead dominates; for a
+20-iter batch the gap closes. GGUF wins on cold-start latency; the
+per-iter cost is a wash.
+
+## Memory note: --lowvram actually unloads
+
+The user pointed out that the previous 50.30 GiB peak came from
+CLIP + VAE + DiT all resident at once. Switching the container to
+`--lowvram` (i.e. dropping `--highvram` and `--gpu-only`) makes
+ComfyUI's model manager partial-free between `Load * Model` calls:
+
+- After the first CLIP load (16.4 GB), partial free drops it to
+  ~3.8 GB before the second CLIP pass — the 12 GB difference goes
+  to system RAM.
+- After the second CLIP load (16.4 GB), partial free keeps ~15.2 GB
+  in VRAM before the DiT load (20 GB) needs to come in.
+- The DiT ends up with 20 GB and the residual CLIP doesn't push us
+  past 36 GB peak, leaving ~15 GB headroom for sampling buffers
+  (sage-attn activations, k/v cache, intermediate features).
+
+This is the right configuration for the 4 GB VRAM + 51 GB GTT
+split: ComfyUI offloads previous models to system RAM
+unified-memory on the APU (no PCIe round-trip on 780M because the
+APU shares the DDR5 bus with the CPU), and the next load reads the
+partial-free version back. ~3 minutes of load overhead across the
+whole prompt is the cost; in exchange we no longer carry 50 GB of
+dead weight through sampling.
+
+## ## What didn't work, and what to do instead
 
 | Attempt | Result | Why |
 |---------|--------|-----|
