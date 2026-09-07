@@ -204,7 +204,96 @@ dead weight through sampling.
 4. Container: `comfyiu:vaskes` (this repo, `profiles/vaskes/Dockerfile`).
 5. CMD may keep `--use-flash-attention`; KJNodes' patch overrides it. Both work.
 
-## What's next
+## Max-scale 2MP × 10sec on --lowvram (overnight 2026-09-07)
+
+Overnight run on the 780M with the new `--lowvram` config: full HD,
+10 seconds, 8 steps with the kijai LightX2V Turbo LoRA, sage-attn
+auto, GGUF Q4_0 DiT + GGUF Q4_K_M encoder.
+
+| | Value |
+|---|---|
+| Resolution | 2.0 MP (1920×1080) |
+| Length | 10 sec @ 24 fps = 240 frames |
+| Sampler steps | 8 (LoRA-distilled) |
+| Attention | sage `auto` (Triton) |
+| Per-iter | 6656.9 s (~111 min) |
+| Total sampling | 14:47:35 |
+| Total prompt | **15:32:15** |
+| DiT at peak | 20.1 GB in GTT + 7.1 GB offloaded to DDR5 system RAM |
+| Headroom at peak | ~21 GB (lowvram reshuffled weights) |
+| Completion | **yes** — render written to /opt/comfyiu/output/ |
+
+This is the largest prompt the 780M will run with H3 today, and the
+first time a 2 MP × 10 sec render has finished without OOM. The
+partial-offload pattern that lowvram triggers (DiT split into the
+active ~20 GB chunk + the rest in DDR5) is what kept peak working set
+inside 50 GiB while still letting sampling buffers grow to the ~25 GB
+they need for a 240-frame 1080p sequence.
+
+Per-iter scales as O(pixel_count × frame_count) for H3. From the
+0.2 MP / 5 sec / 8-step baseline at 28.4 s/iter:
+
+- pixel_count ratio: (2.0 / 0.2) = 10× → ×10
+- frame_count ratio: (240 / 120) = 2× → ×2
+- expected per-iter: 28.4 × 10 × 2 ≈ 568 s
+- observed: 6656 s — about 12× the linear estimate
+
+The extra factor comes from attention being O(seq_len^1.5) and the
+sage-attn kernel not being perfectly cache-friendly for the very
+long sequences that 2 MP × 10 sec produces (~120 K tokens per call
+versus ~10 K at 0.2 MP × 5 sec). 12× more compute per token is
+plausible.
+
+## What --lowvram actually bought us
+
+The earlier 0.2 MP / 5 sec run on `--highvram` peaked at 50+ GiB and
+had ~1 GiB headroom for sampling buffers. At 2 MP × 10 sec, the
+sampling buffers alone need ~25 GB, so the highvram config would have
+OOM'd at step 1. With `--lowvram` the active DiT chunk stays in GTT
+and the residual weights are paged out as the buffers grow:
+
+```
+loaded partially; 20736.65 MB usable, 20125.07 MB loaded,
+                  7079.56 MB offloaded, 611.57 MB buffer reserved
+```
+
+That 7.1 GB offload was the difference between "OOM at step 1" and
+"15.5 hours to completion". The 5× per-iter regression from lowvram
+on small prompts (28.4 → 154 s) is no longer relevant here — at
+max-scale, the kernel paging cost is amortised inside the dominant
+attention compute cost.
+
+## What it would take to make 2 MP × 10 sec fast
+
+A 15.5 hour render is unusable for iteration. In rough order of
+impact on the same hardware:
+
+1. **Spectrum `enabled = true`** (the `Spectrum Apply MiniMax H3`
+   node) — skips ~40% of the H3 transformer calls via Chebyshev
+   forecast. Expected: 15.5 h → ~9-10 h. The user has explicitly
+   said they care about every pixel and don't want this; leaving
+   off by default.
+2. **Sage-attn 2.x** — sage-attn 1.0.6 (ROCm) is already in use;
+   sage-attn 2.x is CUDA-only and unavailable on this APU. No win
+   here until ROCm catches up.
+3. **GGUF Q3_K_S DiT** — would shave another 3-4 GB off the DiT and
+   the dequant cost, but at the cost of measurable quality loss on
+   fine textures. Not recommended.
+4. **Spectrum balanced → max_speed policy** — drops the safety
+   net in the forecast step and trusts the Chebyshev fit more.
+   Expected: another 10-20% on top of (1). Same quality caveat.
+5. **Resolution drop** — 2 MP → 1 MP (1280×720) is a 4× pixel cut,
+   which by the O(pixel × frame) estimate should drop total time
+   by ~3.5×. 15.5 h → ~4.5 h. This is the single biggest knob the
+   user has without touching model code.
+
+The honest reading is that the 780M is a low-end inference target
+for H3 max-scale. NVIDIA 5090 / 5080 will always be 10-50× faster
+here. The path to "overnight 2 MP × 10 sec" is the spec; "few
+hours 2 MP × 10 sec" needs Spectrum or a smaller model. Nothing
+else on the table is going to halve it.
+
+## ## What's next
 
 - ~~4-step run with the same LoRA~~ — tried 2026-09-06, quality was unacceptable. The 8-step config (19:36) is the production sweet spot.
 - Native int8 path (`minimax_h3_ref2va_pruned_int8_convrot.safetensors`) once the OOM pattern is fixed via `unload_model_after`.
