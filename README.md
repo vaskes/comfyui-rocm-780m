@@ -454,6 +454,30 @@ documentation and how to add your own profile.
 
 ---
 
+## ⚠️ Security Disclaimer
+
+These repositories have **not** been audited or tested for security. They
+are intended **only** for local deployments in controlled environments
+(your own machine behind your own firewall, a trusted LAN, or an isolated
+test host).
+
+**There are no warranties of any kind**, express or implied, that this
+code is secure, correct, or fit for any purpose. The author(s) are **not
+responsible** for any damage, data loss, security breach, or other harm
+resulting from the use of this software.
+
+In particular:
+- Container images may run with elevated privileges, host networking, or
+  bind-mounts from the host filesystem.
+- Some tools are designed to **execute arbitrary commands** or **read /
+  write host files**; do not enable them unless you fully understand the
+  implications.
+- Defaults may bind services to `0.0.0.0`; verify before exposing to any
+  untrusted network.
+
+**Use at your own risk. Do not expose to the public internet without a
+proper security review.**
+
 ## License
 
 MIT
