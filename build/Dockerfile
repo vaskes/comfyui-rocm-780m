@@ -66,7 +66,7 @@ RUN pip3 install --break-system-packages --pre \
     --index-url ${TORCH_IDX}
 
 # --- ComfyUI core ---
-ARG COMFYUI_REF=master
+ARG COMFYUI_REF=v0.37.0
 RUN curl -L -s -o /tmp/comfyui.tar.gz https://github.com/comfyanonymous/ComfyUI/archive/refs/heads/${COMFYUI_REF}.tar.gz && \
     tar xzf /tmp/comfyui.tar.gz && \
     mv ComfyUI-${COMFYUI_REF} /opt/ComfyUI && \
